@@ -155,3 +155,55 @@ class GCNLinkPredictor(nn.Module):
         r = torch.cat([H[src], H[dst]], dim=-1)
         scores = self.predictor(r).squeeze(-1)
         return scores, None
+
+class SAGELinkPredictor(nn.Module):
+    """GraphSAGE baseline for comparison."""
+
+    def __init__(self, in_dim: int, hidden_dim: int, L: int = 3):
+        super().__init__()
+        from torch_geometric.nn import SAGEConv
+        self.convs = nn.ModuleList(
+            [SAGEConv(in_dim if i == 0 else hidden_dim, hidden_dim)
+             for i in range(L)]
+        )
+        self.predictor = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, x, edge_index, pairs):
+        H = x
+        for conv in self.convs:
+            H = F.relu(conv(H, edge_index))
+        src, dst = pairs[:, 0], pairs[:, 1]
+        r = torch.cat([H[src], H[dst]], dim=-1)
+        return self.predictor(r).squeeze(-1), None
+
+
+class GATLinkPredictor(nn.Module):
+    """GAT baseline for comparison."""
+
+    def __init__(self, in_dim: int, hidden_dim: int, L: int = 3,
+                 heads: int = 4):
+        super().__init__()
+        from torch_geometric.nn import GATConv
+        self.convs = nn.ModuleList()
+        for i in range(L):
+            in_c  = in_dim if i == 0 else hidden_dim
+            out_c = hidden_dim // heads
+            self.convs.append(GATConv(in_c, out_c, heads=heads,
+                                      concat=True, dropout=0.0))
+        self.predictor = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, x, edge_index, pairs):
+        H = x
+        for conv in self.convs:
+            H = F.relu(conv(H, edge_index))
+        src, dst = pairs[:, 0], pairs[:, 1]
+        r = torch.cat([H[src], H[dst]], dim=-1)
+        return self.predictor(r).squeeze(-1), None
