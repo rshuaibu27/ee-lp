@@ -1,23 +1,13 @@
 import torch
 import numpy as np
 from torch_geometric.datasets import Planetoid
-from torch_geometric.utils import (
-    train_test_split_edges,
-    to_undirected,
-    coalesce,
-    remove_self_loops,
-)
-from torch_geometric.transforms import NormalizeFeatures
+from torch_geometric.transforms import RandomLinkSplit
 
 
-def sample_hard_negatives(pos_pairs, edge_index, num_nodes,
-                           num_neg=1, seed=42):
+def sample_hard_negatives(pos_pairs, edge_index, num_nodes, num_neg=1, seed=42):
     rng = np.random.default_rng(seed)
-
-    # Build adjacency set for fast lookup
     adj = {i: set() for i in range(num_nodes)}
-    for s, d in zip(edge_index[0].cpu().numpy(),
-                    edge_index[1].cpu().numpy()):
+    for s, d in zip(edge_index[0].cpu().numpy(), edge_index[1].cpu().numpy()):
         adj[s].add(d)
         adj[d].add(s)
 
@@ -38,40 +28,37 @@ def sample_hard_negatives(pos_pairs, edge_index, num_nodes,
     return torch.tensor(list(zip(neg_src, neg_dst)), dtype=torch.long)
 
 
-def load_dataset(name="Cora", root="./data",
-                 val_ratio=0.05, test_ratio=0.10,
-                 hard_negatives=True):
-    
-    assert name in ("Cora", "CiteSeer"), \
-        f"Expected Cora or CiteSeer, got {name}"
+def load_dataset(name="Cora", root="./data", hard_negatives=True):
+    assert name in ("Cora", "CiteSeer"), f"Expected Cora or CiteSeer, got {name}"
 
-    dataset = Planetoid(root=root, name=name,
-                        transform=NormalizeFeatures())
-    data = dataset[0]
+    dataset = Planetoid(root=root, name=name)
+    data    = dataset[0]
 
-    # Clean up: remove self-loops, make undirected
-    ei, _ = remove_self_loops(data.edge_index)
-    ei = to_undirected(ei, num_nodes=data.num_nodes)
-    ei, _ = coalesce(ei, num_nodes=data.num_nodes)
-    data.edge_index = ei
+    # Normalise features
+    x      = data.x.float()
+    x      = x / (x.sum(dim=1, keepdim=True).clamp(min=1))
+    data.x = x
 
-    # Split edges into train / val / test
-    data = train_test_split_edges(data,
-                                  val_ratio=val_ratio,
-                                  test_ratio=test_ratio)
+    splitter = RandomLinkSplit(
+        num_val=0.05,
+        num_test=0.10,
+        is_undirected=True,
+        add_negative_train_samples=False,
+        neg_sampling_ratio=0.0,
+    )
+    train_data, val_data, test_data = splitter(data)
 
-    # The training message-passing graph (no val/test edges — no leakage)
-    train_edge_index = data.train_pos_edge_index
+    train_edge_index = train_data.edge_index
+    num_nodes        = data.num_nodes
 
-    def to_pairs(edge_idx):
-        return edge_idx.t().contiguous()
+    def pos_pairs(d):
+        mask = d.edge_label == 1
+        return d.edge_label_index[:, mask].t().contiguous()
 
-    train_pos = to_pairs(data.train_pos_edge_index)
-    val_pos   = to_pairs(data.val_pos_edge_index)
-    test_pos  = to_pairs(data.test_pos_edge_index)
-    num_nodes = data.num_nodes
+    train_pos = pos_pairs(train_data)
+    val_pos   = pos_pairs(val_data)
+    test_pos  = pos_pairs(test_data)
 
-    # Negatives
     if hard_negatives:
         val_neg  = sample_hard_negatives(val_pos,  train_edge_index,
                                          num_nodes, seed=0)
@@ -81,7 +68,6 @@ def load_dataset(name="Cora", root="./data",
         val_neg  = torch.randint(0, num_nodes, (val_pos.size(0), 2))
         test_neg = torch.randint(0, num_nodes, (test_pos.size(0), 2))
 
-    # Training negatives: random is standard practice
     train_neg = torch.randint(0, num_nodes, (train_pos.size(0), 2))
 
     return dict(
