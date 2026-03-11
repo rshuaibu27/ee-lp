@@ -213,7 +213,9 @@ def main():
             data = load_ogbl_collab(root="./data")
             ds_key = "ogbl-collab"
         else:
-            data   = load_dataset(ds_name.capitalize(), hard_negatives=True)
+            name_map = {"cora": "Cora", "citeseer": "CiteSeer"}
+            data   = load_dataset(name_map[ds_name], hard_negatives=True)
+            #data   = load_dataset(ds_name.capitalize(), hard_negatives=True)
             ds_key = ds_name.capitalize()
 
         all_results[ds_key] = {}
